@@ -1,0 +1,34 @@
+{
+  "timezone": "America/Argentina/Buenos_Aires",
+  "schedule": {
+    "daily_checkin_time": "17:00",
+    "first_followup_time": "09:00",
+    "followup_interval_hours": 2,
+    "max_followups_per_day": 3
+  },
+  "scorecard_channel_name": "daily-scorecard",
+  "weekly_summary_day": "monday",
+  "weekly_summary_time": "08:00",
+  "team": [
+    {
+      "name": "Bryan",
+      "slack_id": "REPLACE_WITH_BRYAN_SLACK_ID",
+      "manager_slack_id": "REPLACE_WITH_MANAGER_SLACK_ID",
+      "role": "Sales",
+      "question": "What percentage of your day did you spend on actual selling?",
+      "input_type": "percentage",
+      "target": 60,
+      "target_label": "≥60%"
+    },
+    {
+      "name": "Karla",
+      "slack_id": "REPLACE_WITH_KARLA_SLACK_ID",
+      "manager_slack_id": "REPLACE_WITH_MANAGER_SLACK_ID",
+      "role": "Integrator",
+      "question": "What percentage of your day did you spend on scheduling and coordination?",
+      "input_type": "percentage",
+      "target": null,
+      "target_label": null
+    }
+  ]
+}
