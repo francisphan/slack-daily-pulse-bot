@@ -1,57 +1,68 @@
 import { PendingCheckin, TeamMember } from './types';
-
-const state = new Map<string, PendingCheckin>();
-
-function key(slackId: string, date: string): string {
-  return `${slackId}:${date}`;
-}
+import { getDb } from './db';
 
 export function markCheckinSent(member: TeamMember, date: string): void {
-  state.set(key(member.slack_id, date), {
-    slack_id: member.slack_id,
-    name: member.name,
-    date,
-    followup_count: 0,
-    responded: false,
-  });
+  const db = getDb();
+  db.prepare(`
+    INSERT OR IGNORE INTO pending_checkins (slack_id, name, date, followup_count, responded)
+    VALUES (?, ?, ?, 0, 0)
+  `).run(member.slack_id, member.name, date);
 }
 
 export function markResponded(slackId: string, date: string): void {
-  const entry = state.get(key(slackId, date));
-  if (entry) {
-    entry.responded = true;
-  }
+  const db = getDb();
+  db.prepare(`
+    UPDATE pending_checkins SET responded = 1
+    WHERE slack_id = ? AND date = ?
+  `).run(slackId, date);
 }
 
 export function hasResponded(slackId: string, date: string): boolean {
-  const entry = state.get(key(slackId, date));
-  return entry?.responded ?? false;
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT responded FROM pending_checkins
+    WHERE slack_id = ? AND date = ?
+  `).get(slackId, date) as { responded: number } | undefined;
+  return row?.responded === 1;
 }
 
 export function getPendingFollowups(
   date: string,
   maxFollowups: number
 ): PendingCheckin[] {
-  const pending: PendingCheckin[] = [];
-  for (const entry of state.values()) {
-    if (entry.date === date && !entry.responded && entry.followup_count < maxFollowups) {
-      pending.push(entry);
-    }
-  }
-  return pending;
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT slack_id, name, date, followup_count, responded
+    FROM pending_checkins
+    WHERE date = ? AND responded = 0 AND followup_count < ?
+  `).all(date, maxFollowups) as Array<{
+    slack_id: string;
+    name: string;
+    date: string;
+    followup_count: number;
+    responded: number;
+  }>;
+
+  return rows.map((r) => ({
+    slack_id: r.slack_id,
+    name: r.name,
+    date: r.date,
+    followup_count: r.followup_count,
+    responded: r.responded === 1,
+  }));
 }
 
 export function incrementFollowupCount(slackId: string, date: string): void {
-  const entry = state.get(key(slackId, date));
-  if (entry) {
-    entry.followup_count++;
-  }
+  const db = getDb();
+  db.prepare(`
+    UPDATE pending_checkins SET followup_count = followup_count + 1
+    WHERE slack_id = ? AND date = ?
+  `).run(slackId, date);
 }
 
 export function cleanOldEntries(beforeDate: string): void {
-  for (const [k, entry] of state.entries()) {
-    if (entry.date < beforeDate) {
-      state.delete(k);
-    }
-  }
+  const db = getDb();
+  db.prepare(`
+    DELETE FROM pending_checkins WHERE date < ?
+  `).run(beforeDate);
 }

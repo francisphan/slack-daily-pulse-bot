@@ -136,3 +136,10 @@ export function setupSchedules(app: App, config: AppConfig): void {
   }
   console.log(`  Weekly summary: ${config.weekly_summary_day} ${config.weekly_summary_time} ${tz}`);
 }
+
+export async function rescheduleAll(app: App, config: AppConfig): Promise<void> {
+  console.log('Cancelling all scheduled jobs...');
+  await schedule.gracefulShutdown();
+  console.log('Re-registering scheduled jobs with updated config...');
+  setupSchedules(app, config);
+}

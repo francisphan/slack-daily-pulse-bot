@@ -1,6 +1,9 @@
+import 'dotenv/config';
 import { App, BlockAction, ButtonAction } from '@slack/bolt';
 import { loadConfig } from './config';
 import { setupSchedules } from './scheduler';
+import { registerCommands } from './commands';
+import * as db from './db';
 import * as messenger from './messenger';
 import * as followups from './followups';
 import * as store from './store';
@@ -81,9 +84,23 @@ app.action<BlockAction<ButtonAction>>(
 );
 
 (async () => {
+  db.initialize();
   await app.start();
   console.log('⚡ Daily Pulse Bot is running.');
 
+  registerCommands(app);
   await messenger.ensureScorecardChannel(app, config);
   setupSchedules(app, config);
+
+  // One-off test: send check-in DM to a specific user
+  if (process.env.TEST_USER_ID) {
+    const { DateTime } = await import('luxon');
+    const today = DateTime.now().setZone(config.timezone).toISODate()!;
+    const member = config.team.find((m) => m.slack_id === process.env.TEST_USER_ID);
+    if (member) {
+      await messenger.sendCheckinDM(app, member, today);
+      followups.markCheckinSent(member, today);
+      console.log(`TEST: Sent check-in DM to ${member.name}`);
+    }
+  }
 })();

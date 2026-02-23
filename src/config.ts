@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { AppConfig } from './types';
 
@@ -18,4 +18,8 @@ export function loadConfig(): AppConfig {
   }
 
   return config;
+}
+
+export function saveConfig(config: AppConfig): void {
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }

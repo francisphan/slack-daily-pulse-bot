@@ -12,8 +12,8 @@
   "team": [
     {
       "name": "Bryan",
-      "slack_id": "REPLACE_WITH_BRYAN_SLACK_ID",
-      "manager_slack_id": "REPLACE_WITH_MANAGER_SLACK_ID",
+      "slack_id": "U0VG1L71Q",
+      "manager_slack_id": "U02G2MU8A",
       "role": "Sales",
       "question": "What percentage of your day did you spend on actual selling?",
       "input_type": "percentage",
@@ -22,10 +22,20 @@
     },
     {
       "name": "Karla",
-      "slack_id": "REPLACE_WITH_KARLA_SLACK_ID",
-      "manager_slack_id": "REPLACE_WITH_MANAGER_SLACK_ID",
+      "slack_id": "U02PFAD5EKC",
+      "manager_slack_id": "U02G2MU8A",
       "role": "Integrator",
       "question": "What percentage of your day did you spend on scheduling and coordination?",
+      "input_type": "percentage",
+      "target": null,
+      "target_label": null
+    },
+    {
+      "name": "Francis Phan",
+      "slack_id": "U0ACKBHM2S1",
+      "manager_slack_id": "U02G2MU8A",
+      "role": "Senior squatter",
+      "question": "How many hours did you sleep today?",
       "input_type": "percentage",
       "target": null,
       "target_label": null
