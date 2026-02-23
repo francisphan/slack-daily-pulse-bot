@@ -6,6 +6,7 @@ import { ResponseHistory } from './types';
 const DATA_DIR = resolve(__dirname, '..', 'data');
 const DB_PATH = resolve(DATA_DIR, 'pulse.db');
 const LEGACY_HISTORY_PATH = resolve(DATA_DIR, 'history.json');
+const CONFIG_JSON_PATH = resolve(__dirname, '..', 'config.json');
 
 let db: Database.Database | null = null;
 
@@ -30,6 +31,7 @@ export function initialize(): void {
   createSchema();
   migrateSchema();
   migrateFromJson();
+  migrateConfigFromJson();
 }
 
 function createSchema(): void {
@@ -59,6 +61,13 @@ function createSchema(): void {
       followup_count INTEGER NOT NULL DEFAULT 0,
       responded INTEGER NOT NULL DEFAULT 0,
       UNIQUE(slack_id, date)
+    );
+  `);
+
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     );
   `);
 }
@@ -104,4 +113,19 @@ function migrateFromJson(): void {
 
   renameSync(LEGACY_HISTORY_PATH, LEGACY_HISTORY_PATH + '.bak');
   console.log('  Renamed history.json -> history.json.bak');
+}
+
+function migrateConfigFromJson(): void {
+  if (!existsSync(CONFIG_JSON_PATH)) return;
+
+  const d = getDb();
+  const existing = d.prepare("SELECT 1 FROM config WHERE key = 'app_config'").get();
+  if (existing) return; // already seeded
+
+  console.log('Seeding config from config.json into SQLite...');
+  const raw = readFileSync(CONFIG_JSON_PATH, 'utf-8');
+  // Validate it's parseable JSON before inserting
+  JSON.parse(raw);
+  d.prepare("INSERT INTO config (key, value) VALUES ('app_config', ?)").run(raw);
+  console.log('  Config seeded successfully.');
 }

@@ -9,8 +9,6 @@ import * as followups from './followups';
 import * as store from './store';
 import { DailyResponse } from './types';
 
-const config = loadConfig();
-
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
@@ -273,6 +271,7 @@ app.view('blocker_modal', async ({ ack, view }) => {
 
 (async () => {
   db.initialize();
+  const config = loadConfig();
   await app.start();
   console.log('⚡ Daily Pulse Bot is running.');
 
