@@ -28,6 +28,7 @@ export function initialize(): void {
   db.pragma('foreign_keys = ON');
 
   createSchema();
+  migrateSchema();
   migrateFromJson();
 }
 
@@ -44,6 +45,7 @@ function createSchema(): void {
       date TEXT NOT NULL,
       value INTEGER NOT NULL,
       responded_at TEXT NOT NULL,
+      blocker TEXT,
       UNIQUE(slack_id, date)
     );
   `);
@@ -59,6 +61,16 @@ function createSchema(): void {
       UNIQUE(slack_id, date)
     );
   `);
+}
+
+function migrateSchema(): void {
+  const d = getDb();
+  const columns = d.prepare("PRAGMA table_info(responses)").all() as { name: string }[];
+  const hasBlocker = columns.some((c) => c.name === 'blocker');
+  if (!hasBlocker) {
+    d.exec('ALTER TABLE responses ADD COLUMN blocker TEXT');
+    console.log('Migrated: added blocker column to responses table');
+  }
 }
 
 function migrateFromJson(): void {

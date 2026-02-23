@@ -54,12 +54,20 @@ export async function sendCheckinDM(
 ): Promise<void> {
   const percentages = [20, 40, 60, 80, 100];
 
-  const buttons = percentages.map((pct) => ({
-    type: 'button' as const,
-    text: { type: 'plain_text' as const, text: `${pct}%` },
-    action_id: `checkin_response_${pct}`,
-    value: JSON.stringify({ date, slack_id: member.slack_id, value: pct }),
-  }));
+  const buttons = [
+    ...percentages.map((pct) => ({
+      type: 'button' as const,
+      text: { type: 'plain_text' as const, text: `${pct}%` },
+      action_id: `checkin_response_${pct}`,
+      value: JSON.stringify({ date, slack_id: member.slack_id, value: pct }),
+    })),
+    {
+      type: 'button' as const,
+      text: { type: 'plain_text' as const, text: 'Other %' },
+      action_id: 'checkin_response_custom',
+      value: JSON.stringify({ date, slack_id: member.slack_id }),
+    },
+  ];
 
   await app.client.chat.postMessage({
     channel: member.slack_id,
@@ -85,12 +93,20 @@ export async function sendFollowupDM(
 ): Promise<void> {
   const percentages = [20, 40, 60, 80, 100];
 
-  const buttons = percentages.map((pct) => ({
-    type: 'button' as const,
-    text: { type: 'plain_text' as const, text: `${pct}%` },
-    action_id: `checkin_response_${pct}`,
-    value: JSON.stringify({ date, slack_id: member.slack_id, value: pct }),
-  }));
+  const buttons = [
+    ...percentages.map((pct) => ({
+      type: 'button' as const,
+      text: { type: 'plain_text' as const, text: `${pct}%` },
+      action_id: `checkin_response_${pct}`,
+      value: JSON.stringify({ date, slack_id: member.slack_id, value: pct }),
+    })),
+    {
+      type: 'button' as const,
+      text: { type: 'plain_text' as const, text: 'Other %' },
+      action_id: 'checkin_response_custom',
+      value: JSON.stringify({ date, slack_id: member.slack_id }),
+    },
+  ];
 
   const reminderText =
     attemptNumber === 1
@@ -219,6 +235,29 @@ export async function postWeeklySummary(
       {
         type: 'section',
         text: { type: 'mrkdwn', text: fullMessage },
+      },
+    ],
+  });
+}
+
+export async function postBlockerAlert(
+  app: App,
+  config: AppConfig,
+  member: TeamMember,
+  date: string,
+  blockerText: string
+): Promise<void> {
+  const channelId = await ensureScorecardChannel(app, config);
+
+  const message = `:rotating_light: *Issue Flagged* — ${member.name} (${member.role})\n> ${blockerText}\n> _${date}_`;
+
+  await app.client.chat.postMessage({
+    channel: channelId,
+    text: message,
+    blocks: [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: message },
       },
     ],
   });

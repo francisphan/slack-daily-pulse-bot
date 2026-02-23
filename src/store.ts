@@ -5,9 +5,15 @@ import { getDb } from './db';
 export function addResponse(entry: DailyResponse): void {
   const db = getDb();
   db.prepare(`
-    INSERT OR REPLACE INTO responses (slack_id, name, role, question, date, value, responded_at)
-    VALUES (@slack_id, @name, @role, @question, @date, @value, @responded_at)
-  `).run(entry);
+    INSERT OR REPLACE INTO responses (slack_id, name, role, question, date, value, responded_at, blocker)
+    VALUES (@slack_id, @name, @role, @question, @date, @value, @responded_at, @blocker)
+  `).run({ ...entry, blocker: entry.blocker ?? null });
+}
+
+export function updateBlocker(slackId: string, date: string, blocker: string): void {
+  const db = getDb();
+  db.prepare('UPDATE responses SET blocker = @blocker WHERE slack_id = @slack_id AND date = @date')
+    .run({ slack_id: slackId, date, blocker });
 }
 
 export function getResponsesForMember(

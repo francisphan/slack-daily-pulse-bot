@@ -33,6 +33,7 @@ export interface DailyResponse {
   date: string;
   value: number;
   responded_at: string;
+  blocker?: string;
 }
 
 export interface ResponseHistory {
