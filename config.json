@@ -35,7 +35,7 @@
       "slack_id": "U0ACKBHM2S1",
       "manager_slack_id": "U02G2MU8A",
       "role": "Senior squatter",
-      "question": "How many hours did you sleep today?",
+      "question": "How much of your day was sleeping?",
       "input_type": "percentage",
       "target": null,
       "target_label": null
