@@ -32,6 +32,7 @@ export function initialize(): void {
   migrateSchema();
   migrateFromJson();
   migrateConfigFromJson();
+  seedAdminRoles();
 }
 
 function createSchema(): void {
@@ -68,6 +69,16 @@ function createSchema(): void {
     CREATE TABLE IF NOT EXISTS config (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+  `);
+
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS roles (
+      slack_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('admin', 'manager')),
+      added_by TEXT NOT NULL,
+      added_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (slack_id, role)
     );
   `);
 }
@@ -128,4 +139,18 @@ function migrateConfigFromJson(): void {
   JSON.parse(raw);
   d.prepare("INSERT INTO config (key, value) VALUES ('app_config', ?)").run(raw);
   console.log('  Config seeded successfully.');
+}
+
+function seedAdminRoles(): void {
+  const d = getDb();
+  const count = d.prepare("SELECT COUNT(*) as cnt FROM roles").get() as { cnt: number };
+  if (count.cnt > 0) return; // already seeded
+
+  console.log('Seeding initial admin roles...');
+  const insert = d.prepare(
+    "INSERT OR IGNORE INTO roles (slack_id, role, added_by) VALUES (?, 'admin', 'SYSTEM')"
+  );
+  insert.run('U0ACKBHM2S1'); // Francis Phan
+  insert.run('U02G2MU8A');   // Michael Evans
+  console.log('  Seeded 2 admin roles.');
 }

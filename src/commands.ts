@@ -2,21 +2,11 @@ import { App } from '@slack/bolt';
 import { loadConfig, saveConfig } from './config';
 import { rescheduleAll } from './scheduler';
 import { AppConfig, TeamMember } from './types';
-
-// ── Admin access control ─────────────────────────────────────────────
-
-const ADMIN_USER_IDS = new Set([
-  'U0ACKBHM2S1', // Francis Phan
-  'U02G2MU8A',   // Michael Evans
-]);
-
-function isAdmin(userId: string): boolean {
-  return ADMIN_USER_IDS.has(userId);
-}
+import { isAdmin, isManager, hasAnyRole, getUserRole, addRole, removeRole, listByRole, adminCount, UserRole } from './roles';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function buildTeamListBlocks(config: AppConfig) {
+function buildTeamListBlocks(team: TeamMember[], fullTeam: TeamMember[]) {
   const blocks: any[] = [
     {
       type: 'header',
@@ -24,8 +14,8 @@ function buildTeamListBlocks(config: AppConfig) {
     },
   ];
 
-  for (let i = 0; i < config.team.length; i++) {
-    const m = config.team[i];
+  for (const m of team) {
+    const realIndex = fullTeam.findIndex((t) => t.slack_id === m.slack_id);
     const targetStr = m.target !== null ? `${m.target}% (${m.target_label})` : 'None';
     blocks.push(
       {
@@ -36,15 +26,15 @@ function buildTeamListBlocks(config: AppConfig) {
         },
         accessory: {
           type: 'overflow',
-          action_id: `team_overflow_${i}`,
+          action_id: `team_overflow_${realIndex}`,
           options: [
             {
               text: { type: 'plain_text', text: 'Edit' },
-              value: `edit_${i}`,
+              value: `edit_${realIndex}`,
             },
             {
               text: { type: 'plain_text', text: 'Remove' },
-              value: `remove_${i}`,
+              value: `remove_${realIndex}`,
             },
           ],
         },
@@ -303,8 +293,8 @@ function buildConfigSummaryBlocks(config: AppConfig) {
   ];
 }
 
-function buildScheduleBlocks(config: AppConfig) {
-  return [
+function buildScheduleBlocks(config: AppConfig, role: UserRole) {
+  const blocks: any[] = [
     {
       type: 'header',
       text: { type: 'plain_text', text: 'Schedule Settings' },
@@ -323,7 +313,10 @@ function buildScheduleBlocks(config: AppConfig) {
         ].join('\n'),
       },
     },
-    {
+  ];
+
+  if (role === 'admin') {
+    blocks.push({
       type: 'actions',
       elements: [
         {
@@ -333,8 +326,98 @@ function buildScheduleBlocks(config: AppConfig) {
           style: 'primary',
         },
       ],
+    });
+  }
+
+  return blocks;
+}
+
+// ── Admin panel helpers ──────────────────────────────────────────────
+
+function buildAdminPanelBlocks() {
+  const admins = listByRole('admin');
+  const managers = listByRole('manager');
+
+  const adminLines = admins.length > 0
+    ? admins.map((a) => `• <@${a.slack_id}>`).join('\n')
+    : '_None_';
+  const managerLines = managers.length > 0
+    ? managers.map((m) => `• <@${m.slack_id}>`).join('\n')
+    : '_None_';
+
+  return [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: 'Role Management' },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Admins (${admins.length})*\n${adminLines}`,
+      },
+    },
+    { type: 'divider' },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*Managers (${managers.length})*\n${managerLines}`,
+      },
+    },
+    { type: 'divider' },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Add Admin' },
+          action_id: 'admin_add_admin',
+          style: 'primary',
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Remove Admin' },
+          action_id: 'admin_remove_admin',
+          style: 'danger',
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Add Manager' },
+          action_id: 'admin_add_manager',
+          style: 'primary',
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Remove Manager' },
+          action_id: 'admin_remove_manager',
+          style: 'danger',
+        },
+      ],
     },
   ];
+}
+
+function buildRolePickerModal(action: 'add' | 'remove', role: 'admin' | 'manager') {
+  const titleText = `${action === 'add' ? 'Add' : 'Remove'} ${role === 'admin' ? 'Admin' : 'Manager'}`;
+  return {
+    type: 'modal' as const,
+    callback_id: `modal_${action}_${role}`,
+    title: { type: 'plain_text' as const, text: titleText },
+    submit: { type: 'plain_text' as const, text: titleText },
+    close: { type: 'plain_text' as const, text: 'Cancel' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'user_block',
+        label: { type: 'plain_text' as const, text: 'Select User' },
+        element: {
+          type: 'users_select',
+          action_id: 'user_input',
+        },
+      },
+    ],
+  };
 }
 
 // ── Time validation helper ───────────────────────────────────────────
@@ -350,8 +433,8 @@ export function registerCommands(app: App): void {
 
   app.command('/pulse-config', async ({ ack, respond, command }) => {
     await ack();
-    if (!isAdmin(command.user_id)) {
-      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins can use this command.' });
+    if (!hasAnyRole(command.user_id)) {
+      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins and managers can use this command.' });
       return;
     }
     const config = loadConfig();
@@ -365,14 +448,19 @@ export function registerCommands(app: App): void {
 
   app.command('/pulse-team', async ({ ack, respond, command }) => {
     await ack();
-    if (!isAdmin(command.user_id)) {
-      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins can use this command.' });
+    const userId = command.user_id;
+    const role = getUserRole(userId);
+    if (role === 'none') {
+      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins and managers can use this command.' });
       return;
     }
     const config = loadConfig();
+    const visibleTeam = role === 'admin'
+      ? config.team
+      : config.team.filter((m) => m.manager_slack_id === userId);
     await respond({
       response_type: 'ephemeral',
-      blocks: buildTeamListBlocks(config),
+      blocks: buildTeamListBlocks(visibleTeam, config.team),
     });
   });
 
@@ -380,14 +468,29 @@ export function registerCommands(app: App): void {
 
   app.command('/pulse-schedule', async ({ ack, respond, command }) => {
     await ack();
-    if (!isAdmin(command.user_id)) {
-      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins can use this command.' });
+    const role = getUserRole(command.user_id);
+    if (role === 'none') {
+      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins and managers can use this command.' });
       return;
     }
     const config = loadConfig();
     await respond({
       response_type: 'ephemeral',
-      blocks: buildScheduleBlocks(config),
+      blocks: buildScheduleBlocks(config, role),
+    });
+  });
+
+  // ── /pulse-admin ───────────────────────────────────────────────────
+
+  app.command('/pulse-admin', async ({ ack, respond, command }) => {
+    await ack();
+    if (!isAdmin(command.user_id)) {
+      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins can use this command.' });
+      return;
+    }
+    await respond({
+      response_type: 'ephemeral',
+      blocks: buildAdminPanelBlocks(),
     });
   });
 
@@ -395,7 +498,8 @@ export function registerCommands(app: App): void {
 
   app.action(/^team_overflow_\d+$/, async ({ ack, action, body, client }) => {
     await ack();
-    if (!isAdmin(body.user.id)) return;
+    const userId = body.user.id;
+    if (!hasAnyRole(userId)) return;
     const config = loadConfig();
     const overflowAction = action as any;
     const selectedValue: string = overflowAction.selected_option.value;
@@ -403,6 +507,9 @@ export function registerCommands(app: App): void {
     const index = parseInt(indexStr, 10);
     const member = config.team[index];
     if (!member) return;
+
+    // Managers can only edit/remove their own reports
+    if (!isAdmin(userId) && member.manager_slack_id !== userId) return;
 
     const triggerId = (body as any).trigger_id;
     if (!triggerId) return;
@@ -424,7 +531,7 @@ export function registerCommands(app: App): void {
 
   app.action('team_add_member', async ({ ack, body, client }) => {
     await ack();
-    if (!isAdmin(body.user.id)) return;
+    if (!hasAnyRole(body.user.id)) return;
     const triggerId = (body as any).trigger_id;
     if (!triggerId) return;
 
@@ -449,17 +556,151 @@ export function registerCommands(app: App): void {
     });
   });
 
+  // ── Admin panel buttons ────────────────────────────────────────────
+
+  app.action('admin_add_admin', async ({ ack, body, client }) => {
+    await ack();
+    if (!isAdmin(body.user.id)) return;
+    const triggerId = (body as any).trigger_id;
+    if (!triggerId) return;
+    await client.views.open({
+      trigger_id: triggerId,
+      view: buildRolePickerModal('add', 'admin') as any,
+    });
+  });
+
+  app.action('admin_remove_admin', async ({ ack, body, client }) => {
+    await ack();
+    if (!isAdmin(body.user.id)) return;
+    const triggerId = (body as any).trigger_id;
+    if (!triggerId) return;
+    await client.views.open({
+      trigger_id: triggerId,
+      view: buildRolePickerModal('remove', 'admin') as any,
+    });
+  });
+
+  app.action('admin_add_manager', async ({ ack, body, client }) => {
+    await ack();
+    if (!isAdmin(body.user.id)) return;
+    const triggerId = (body as any).trigger_id;
+    if (!triggerId) return;
+    await client.views.open({
+      trigger_id: triggerId,
+      view: buildRolePickerModal('add', 'manager') as any,
+    });
+  });
+
+  app.action('admin_remove_manager', async ({ ack, body, client }) => {
+    await ack();
+    if (!isAdmin(body.user.id)) return;
+    const triggerId = (body as any).trigger_id;
+    if (!triggerId) return;
+    await client.views.open({
+      trigger_id: triggerId,
+      view: buildRolePickerModal('remove', 'manager') as any,
+    });
+  });
+
+  // ── Modal: Add Admin submit ────────────────────────────────────────
+
+  app.view('modal_add_admin', async ({ ack, view, body }) => {
+    const selectedUser = view.state.values.user_block.user_input.selected_user!;
+    if (isAdmin(selectedUser)) {
+      await ack({
+        response_action: 'errors',
+        errors: { user_block: 'This user is already an admin.' },
+      });
+      return;
+    }
+    await ack();
+    addRole(selectedUser, 'admin', body.user.id);
+    console.log(`[commands] Admin added: ${selectedUser} by ${body.user.id}`);
+  });
+
+  // ── Modal: Remove Admin submit ─────────────────────────────────────
+
+  app.view('modal_remove_admin', async ({ ack, view, body }) => {
+    const selectedUser = view.state.values.user_block.user_input.selected_user!;
+
+    if (selectedUser === body.user.id) {
+      await ack({
+        response_action: 'errors',
+        errors: { user_block: 'You cannot remove yourself as admin.' },
+      });
+      return;
+    }
+
+    if (!isAdmin(selectedUser)) {
+      await ack({
+        response_action: 'errors',
+        errors: { user_block: 'This user is not an admin.' },
+      });
+      return;
+    }
+
+    if (adminCount() <= 1) {
+      await ack({
+        response_action: 'errors',
+        errors: { user_block: 'Cannot remove the last admin.' },
+      });
+      return;
+    }
+
+    await ack();
+    removeRole(selectedUser, 'admin');
+    console.log(`[commands] Admin removed: ${selectedUser} by ${body.user.id}`);
+  });
+
+  // ── Modal: Add Manager submit ──────────────────────────────────────
+
+  app.view('modal_add_manager', async ({ ack, view, body }) => {
+    const selectedUser = view.state.values.user_block.user_input.selected_user!;
+    if (isManager(selectedUser)) {
+      await ack({
+        response_action: 'errors',
+        errors: { user_block: 'This user is already a manager.' },
+      });
+      return;
+    }
+    await ack();
+    addRole(selectedUser, 'manager', body.user.id);
+    console.log(`[commands] Manager added: ${selectedUser} by ${body.user.id}`);
+  });
+
+  // ── Modal: Remove Manager submit ───────────────────────────────────
+
+  app.view('modal_remove_manager', async ({ ack, view, body }) => {
+    const selectedUser = view.state.values.user_block.user_input.selected_user!;
+    if (!isManager(selectedUser)) {
+      await ack({
+        response_action: 'errors',
+        errors: { user_block: 'This user is not a manager.' },
+      });
+      return;
+    }
+    await ack();
+    removeRole(selectedUser, 'manager');
+    console.log(`[commands] Manager removed: ${selectedUser} by ${body.user.id}`);
+  });
+
   // ── Modal: Add Member submit ───────────────────────────────────────
 
-  app.view('modal_add_member', async ({ ack, view }) => {
+  app.view('modal_add_member', async ({ ack, view, body }) => {
+    const userId = body.user.id;
     const values = view.state.values;
     const name = values.name_block.name_input.value!;
     const slackId = values.slack_id_block.slack_id_input.selected_user!;
-    const managerId = values.manager_block.manager_input.selected_user!;
+    let managerId = values.manager_block.manager_input.selected_user!;
     const role = values.role_block.role_input.value!;
     const question = values.question_block.question_input.value!;
     const targetRaw = values.target_block.target_input.value;
     const target = targetRaw ? parseInt(targetRaw, 10) : null;
+
+    // Managers can only add members under themselves
+    if (!isAdmin(userId)) {
+      managerId = userId;
+    }
 
     const config = loadConfig();
 
@@ -494,18 +735,33 @@ export function registerCommands(app: App): void {
 
   // ── Modal: Edit Member submit ──────────────────────────────────────
 
-  app.view('modal_edit_member', async ({ ack, view }) => {
+  app.view('modal_edit_member', async ({ ack, view, body }) => {
+    const userId = body.user.id;
     const index = parseInt(view.private_metadata, 10);
     const values = view.state.values;
     const name = values.name_block.name_input.value!;
     const slackId = values.slack_id_block.slack_id_input.selected_user!;
-    const managerId = values.manager_block.manager_input.selected_user!;
+    let managerId = values.manager_block.manager_input.selected_user!;
     const role = values.role_block.role_input.value!;
     const question = values.question_block.question_input.value!;
     const targetRaw = values.target_block.target_input.value;
     const target = targetRaw ? parseInt(targetRaw, 10) : null;
 
     const config = loadConfig();
+
+    // Managers can only edit their own reports
+    if (!isAdmin(userId) && config.team[index]?.manager_slack_id !== userId) {
+      await ack({
+        response_action: 'errors',
+        errors: { name_block: 'You can only edit your own direct reports.' },
+      });
+      return;
+    }
+
+    // Managers can only set manager to themselves
+    if (!isAdmin(userId)) {
+      managerId = userId;
+    }
 
     const duplicate = config.team.find((m, i) => m.slack_id === slackId && i !== index);
     if (duplicate) {
@@ -537,10 +793,18 @@ export function registerCommands(app: App): void {
 
   // ── Modal: Remove Member submit ────────────────────────────────────
 
-  app.view('modal_remove_member', async ({ ack, view }) => {
-    await ack();
+  app.view('modal_remove_member', async ({ ack, view, body }) => {
+    const userId = body.user.id;
     const index = parseInt(view.private_metadata, 10);
     const config = loadConfig();
+
+    // Managers can only remove their own reports
+    if (!isAdmin(userId) && config.team[index]?.manager_slack_id !== userId) {
+      await ack();
+      return;
+    }
+
+    await ack();
 
     if (index >= 0 && index < config.team.length) {
       const removed = config.team.splice(index, 1)[0];
