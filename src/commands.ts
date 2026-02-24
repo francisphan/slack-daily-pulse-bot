@@ -1,8 +1,11 @@
 import { App } from '@slack/bolt';
-import { loadConfig, saveConfig } from './config';
+import { DateTime } from 'luxon';
+import { loadConfig, saveConfig, isPaused, setPaused } from './config';
 import { rescheduleAll } from './scheduler';
 import { AppConfig, TeamMember } from './types';
 import { isAdmin, isManager, hasAnyRole, getUserRole, addRole, removeRole, listByRole, adminCount, UserRole } from './roles';
+import * as ooo from './ooo';
+import { getDb } from './db';
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -332,9 +335,261 @@ function buildScheduleBlocks(config: AppConfig, role: UserRole) {
   return blocks;
 }
 
+// ── Status dashboard helpers ─────────────────────────────────────────
+
+function buildStatusBlocks(config: AppConfig, userId: string, role: UserRole) {
+  const today = DateTime.now().setZone(config.timezone).toISODate()!;
+  const visibleTeam = role === 'admin'
+    ? config.team
+    : config.team.filter((m) => m.manager_slack_id === userId);
+
+  const responded: { member: TeamMember; value: number; blocker: string | null }[] = [];
+  const pending: TeamMember[] = [];
+  const oooMembers: TeamMember[] = [];
+
+  for (const member of visibleTeam) {
+    if (member.slack_id.startsWith('REPLACE')) continue;
+
+    if (ooo.isOoo(member.slack_id, today)) {
+      oooMembers.push(member);
+      continue;
+    }
+
+    const row = getDb()
+      .prepare('SELECT value, blocker FROM responses WHERE slack_id = ? AND date = ?')
+      .get(member.slack_id, today) as { value: number; blocker: string | null } | undefined;
+
+    if (row) {
+      responded.push({ member, value: row.value, blocker: row.blocker });
+    } else {
+      pending.push(member);
+    }
+  }
+
+  const blocks: any[] = [];
+
+  if (isPaused()) {
+    blocks.push({
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: ':double_vertical_bar: *Bot is currently paused* — no check-ins or follow-ups are being sent.',
+      },
+    });
+    blocks.push({ type: 'divider' });
+  }
+
+  blocks.push({
+    type: 'header',
+    text: { type: 'plain_text', text: `Check-in Status — ${today}` },
+  });
+
+  // Responded section
+  const respondedLines = responded.length > 0
+    ? responded.map((r) => {
+        const blockerTag = r.blocker ? ' :warning:' : '';
+        return `• <@${r.member.slack_id}> — ${r.value}%${blockerTag}`;
+      }).join('\n')
+    : '_None yet_';
+
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `:white_check_mark: *Responded (${responded.length})*\n${respondedLines}`,
+    },
+  });
+
+  blocks.push({ type: 'divider' });
+
+  // Pending section
+  const pendingLines = pending.length > 0
+    ? pending.map((m) => `• <@${m.slack_id}>`).join('\n')
+    : '_None_';
+
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `:hourglass_flowing_sand: *Pending (${pending.length})*\n${pendingLines}`,
+    },
+  });
+
+  blocks.push({ type: 'divider' });
+
+  // OOO section
+  const oooLines = oooMembers.length > 0
+    ? oooMembers.map((m) => `• <@${m.slack_id}>`).join('\n')
+    : '_None_';
+
+  blocks.push({
+    type: 'section',
+    text: {
+      type: 'mrkdwn',
+      text: `:palm_tree: *Out of Office (${oooMembers.length})*\n${oooLines}`,
+    },
+  });
+
+  return blocks;
+}
+
+// ── OOO helpers ─────────────────────────────────────────────────────
+
+function buildOooBlocks(userId: string, role: UserRole, config: AppConfig) {
+  const today = DateTime.now().setZone(config.timezone).toISODate()!;
+  const entries = ooo.getOooForMember(userId, today);
+
+  const blocks: any[] = [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: 'Your Out of Office' },
+    },
+  ];
+
+  if (entries.length > 0) {
+    const lines = entries.map((e) => {
+      const reason = e.reason ? ` — ${e.reason}` : '';
+      return `• ${e.start_date} to ${e.end_date}${reason}`;
+    }).join('\n');
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: lines },
+    });
+  } else {
+    blocks.push({
+      type: 'section',
+      text: { type: 'mrkdwn', text: '_No active or upcoming OOO entries._' },
+    });
+  }
+
+  blocks.push({ type: 'divider' });
+
+  const buttons: any[] = [
+    {
+      type: 'button',
+      text: { type: 'plain_text', text: 'Set OOO' },
+      action_id: 'ooo_set_self',
+      style: 'primary',
+    },
+  ];
+
+  if (entries.length > 0) {
+    buttons.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Clear My OOO' },
+      action_id: 'ooo_clear_self',
+      style: 'danger',
+    });
+  }
+
+  if (role === 'admin' || role === 'manager') {
+    buttons.push({
+      type: 'button',
+      text: { type: 'plain_text', text: 'Set OOO for Others' },
+      action_id: 'ooo_set_other',
+    });
+  }
+
+  blocks.push({ type: 'actions', elements: buttons });
+
+  return blocks;
+}
+
+function buildOooSelfModal() {
+  return {
+    type: 'modal' as const,
+    callback_id: 'modal_ooo_set_self',
+    title: { type: 'plain_text' as const, text: 'Set OOO' },
+    submit: { type: 'plain_text' as const, text: 'Save' },
+    close: { type: 'plain_text' as const, text: 'Cancel' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'start_date_block',
+        label: { type: 'plain_text' as const, text: 'Start Date' },
+        element: {
+          type: 'datepicker',
+          action_id: 'start_date_input',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'end_date_block',
+        label: { type: 'plain_text' as const, text: 'End Date' },
+        element: {
+          type: 'datepicker',
+          action_id: 'end_date_input',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'reason_block',
+        optional: true,
+        label: { type: 'plain_text' as const, text: 'Reason' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'reason_input',
+          placeholder: { type: 'plain_text' as const, text: 'e.g. Vacation, Conference' },
+        },
+      },
+    ],
+  };
+}
+
+function buildOooOtherModal() {
+  return {
+    type: 'modal' as const,
+    callback_id: 'modal_ooo_set_other',
+    title: { type: 'plain_text' as const, text: 'Set OOO for Member' },
+    submit: { type: 'plain_text' as const, text: 'Save' },
+    close: { type: 'plain_text' as const, text: 'Cancel' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'user_block',
+        label: { type: 'plain_text' as const, text: 'Team Member' },
+        element: {
+          type: 'users_select',
+          action_id: 'user_input',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'start_date_block',
+        label: { type: 'plain_text' as const, text: 'Start Date' },
+        element: {
+          type: 'datepicker',
+          action_id: 'start_date_input',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'end_date_block',
+        label: { type: 'plain_text' as const, text: 'End Date' },
+        element: {
+          type: 'datepicker',
+          action_id: 'end_date_input',
+        },
+      },
+      {
+        type: 'input',
+        block_id: 'reason_block',
+        optional: true,
+        label: { type: 'plain_text' as const, text: 'Reason' },
+        element: {
+          type: 'plain_text_input',
+          action_id: 'reason_input',
+          placeholder: { type: 'plain_text' as const, text: 'e.g. Vacation, Conference' },
+        },
+      },
+    ],
+  };
+}
+
 // ── Admin panel helpers ──────────────────────────────────────────────
 
 function buildAdminPanelBlocks() {
+  const paused = isPaused();
   const admins = listByRole('admin');
   const managers = listByRole('manager');
 
@@ -346,6 +601,38 @@ function buildAdminPanelBlocks() {
     : '_None_';
 
   return [
+    {
+      type: 'header',
+      text: { type: 'plain_text', text: 'Bot Controls' },
+    },
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: paused
+          ? ':double_vertical_bar: Bot is *paused* — no check-ins or follow-ups are being sent.'
+          : ':large_green_circle: Bot is *active* — running normally.',
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        paused
+          ? {
+              type: 'button',
+              text: { type: 'plain_text', text: 'Resume Bot' },
+              action_id: 'admin_resume_bot',
+              style: 'primary',
+            }
+          : {
+              type: 'button',
+              text: { type: 'plain_text', text: 'Pause Bot' },
+              action_id: 'admin_pause_bot',
+              style: 'danger',
+            },
+      ],
+    },
+    { type: 'divider' },
     {
       type: 'header',
       text: { type: 'plain_text', text: 'Role Management' },
@@ -494,6 +781,42 @@ export function registerCommands(app: App): void {
     });
   });
 
+  // ── /pulse-status ────────────────────────────────────────────────────
+
+  app.command('/pulse-status', async ({ ack, respond, command }) => {
+    await ack();
+    const userId = command.user_id;
+    const role = getUserRole(userId);
+    if (role === 'none') {
+      await respond({ response_type: 'ephemeral', text: 'Sorry, only admins and managers can use this command.' });
+      return;
+    }
+    const config = loadConfig();
+    await respond({
+      response_type: 'ephemeral',
+      blocks: buildStatusBlocks(config, userId, role),
+    });
+  });
+
+  // ── /pulse-ooo ──────────────────────────────────────────────────────
+
+  app.command('/pulse-ooo', async ({ ack, respond, command }) => {
+    await ack();
+    const userId = command.user_id;
+    const role = getUserRole(userId);
+    // Any team member can use self-serve OOO
+    const config = loadConfig();
+    const isMember = config.team.some((m) => m.slack_id === userId);
+    if (!isMember && role === 'none') {
+      await respond({ response_type: 'ephemeral', text: 'Sorry, you must be a team member or admin/manager to use this command.' });
+      return;
+    }
+    await respond({
+      response_type: 'ephemeral',
+      blocks: buildOooBlocks(userId, role, config),
+    });
+  });
+
   // ── Team overflow menu (Edit / Remove) ─────────────────────────────
 
   app.action(/^team_overflow_\d+$/, async ({ ack, action, body, client }) => {
@@ -600,6 +923,127 @@ export function registerCommands(app: App): void {
       trigger_id: triggerId,
       view: buildRolePickerModal('remove', 'manager') as any,
     });
+  });
+
+  // ── Pause / Resume bot ─────────────────────────────────────────────
+
+  app.action('admin_pause_bot', async ({ ack, body, respond }) => {
+    await ack();
+    if (!isAdmin(body.user.id)) return;
+    setPaused(true);
+    console.log(`[commands] Bot paused by ${body.user.id}`);
+    await respond({
+      response_type: 'ephemeral',
+      replace_original: true,
+      blocks: buildAdminPanelBlocks(),
+    });
+  });
+
+  app.action('admin_resume_bot', async ({ ack, body, respond }) => {
+    await ack();
+    if (!isAdmin(body.user.id)) return;
+    setPaused(false);
+    console.log(`[commands] Bot resumed by ${body.user.id}`);
+    await respond({
+      response_type: 'ephemeral',
+      replace_original: true,
+      blocks: buildAdminPanelBlocks(),
+    });
+  });
+
+  // ── OOO action buttons ────────────────────────────────────────────
+
+  app.action('ooo_set_self', async ({ ack, body, client }) => {
+    await ack();
+    const triggerId = (body as any).trigger_id;
+    if (!triggerId) return;
+    await client.views.open({
+      trigger_id: triggerId,
+      view: buildOooSelfModal() as any,
+    });
+  });
+
+  app.action('ooo_clear_self', async ({ ack, body, respond }) => {
+    await ack();
+    const userId = body.user.id;
+    const config = loadConfig();
+    const today = DateTime.now().setZone(config.timezone).toISODate()!;
+    const count = ooo.clearOoo(userId, today);
+    console.log(`[commands] Cleared ${count} OOO entries for ${userId}`);
+    const role = getUserRole(userId);
+    await respond({
+      response_type: 'ephemeral',
+      replace_original: true,
+      blocks: buildOooBlocks(userId, role, config),
+    });
+  });
+
+  app.action('ooo_set_other', async ({ ack, body, client }) => {
+    await ack();
+    if (!hasAnyRole(body.user.id)) return;
+    const triggerId = (body as any).trigger_id;
+    if (!triggerId) return;
+    await client.views.open({
+      trigger_id: triggerId,
+      view: buildOooOtherModal() as any,
+    });
+  });
+
+  // ── Modal: OOO Set Self submit ────────────────────────────────────
+
+  app.view('modal_ooo_set_self', async ({ ack, view, body }) => {
+    const values = view.state.values;
+    const startDate = values.start_date_block.start_date_input.selected_date!;
+    const endDate = values.end_date_block.end_date_input.selected_date!;
+    const reason = values.reason_block.reason_input.value || null;
+
+    if (endDate < startDate) {
+      await ack({
+        response_action: 'errors',
+        errors: { end_date_block: 'End date must be on or after start date.' },
+      });
+      return;
+    }
+
+    await ack();
+    ooo.addOoo(body.user.id, startDate, endDate, reason, body.user.id);
+    console.log(`[commands] OOO set for self: ${body.user.id} ${startDate} to ${endDate}`);
+  });
+
+  // ── Modal: OOO Set Other submit ───────────────────────────────────
+
+  app.view('modal_ooo_set_other', async ({ ack, view, body }) => {
+    const userId = body.user.id;
+    const values = view.state.values;
+    const targetUser = values.user_block.user_input.selected_user!;
+    const startDate = values.start_date_block.start_date_input.selected_date!;
+    const endDate = values.end_date_block.end_date_input.selected_date!;
+    const reason = values.reason_block.reason_input.value || null;
+
+    if (endDate < startDate) {
+      await ack({
+        response_action: 'errors',
+        errors: { end_date_block: 'End date must be on or after start date.' },
+      });
+      return;
+    }
+
+    // Manager scope check: can only set OOO for their reports
+    if (!isAdmin(userId)) {
+      const config = loadConfig();
+      const member = config.team.find((m) => m.slack_id === targetUser);
+      if (!member || member.manager_slack_id !== userId) {
+        await ack({
+          response_action: 'errors',
+          errors: { user_block: 'You can only set OOO for your direct reports.' },
+        });
+        return;
+      }
+    }
+
+    await ack();
+    ooo.addOoo(targetUser, startDate, endDate, reason, userId);
+    console.log(`[commands] OOO set by ${userId} for ${targetUser}: ${startDate} to ${endDate}`);
   });
 
   // ── Modal: Add Admin submit ────────────────────────────────────────
