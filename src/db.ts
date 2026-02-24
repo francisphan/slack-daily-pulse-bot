@@ -81,6 +81,19 @@ function createSchema(): void {
       PRIMARY KEY (slack_id, role)
     );
   `);
+
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS ooo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slack_id TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      reason TEXT,
+      set_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(slack_id, start_date, end_date)
+    );
+  `);
 }
 
 function migrateSchema(): void {
@@ -130,15 +143,28 @@ function migrateConfigFromJson(): void {
   if (!existsSync(CONFIG_JSON_PATH)) return;
 
   const d = getDb();
-  const existing = d.prepare("SELECT 1 FROM config WHERE key = 'app_config'").get();
-  if (existing) return; // already seeded
-
-  console.log('Seeding config from config.json into SQLite...');
   const raw = readFileSync(CONFIG_JSON_PATH, 'utf-8');
-  // Validate it's parseable JSON before inserting
-  JSON.parse(raw);
-  d.prepare("INSERT INTO config (key, value) VALUES ('app_config', ?)").run(raw);
-  console.log('  Config seeded successfully.');
+  const fileConfig = JSON.parse(raw);
+
+  const existing = d.prepare("SELECT value FROM config WHERE key = 'app_config'").get() as { value: string } | undefined;
+  if (!existing) {
+    console.log('Seeding config from config.json into SQLite...');
+    d.prepare("INSERT INTO config (key, value) VALUES ('app_config', ?)").run(raw);
+    console.log('  Config seeded successfully.');
+    return;
+  }
+
+  // Merge any new team members from config.json into the DB
+  const dbConfig = JSON.parse(existing.value);
+  const existingIds = new Set(dbConfig.team.map((m: any) => m.slack_id));
+  const newMembers = fileConfig.team.filter((m: any) => !existingIds.has(m.slack_id));
+
+  if (newMembers.length > 0) {
+    dbConfig.team.push(...newMembers);
+    d.prepare("UPDATE config SET value = ? WHERE key = 'app_config'")
+      .run(JSON.stringify(dbConfig, null, 2));
+    console.log(`  Merged ${newMembers.length} new team member(s) from config.json: ${newMembers.map((m: any) => m.name).join(', ')}`);
+  }
 }
 
 function seedAdminRoles(): void {
