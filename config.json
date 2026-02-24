@@ -39,6 +39,16 @@
       "input_type": "percentage",
       "target": null,
       "target_label": null
+    },
+    {
+      "name": "Michael Evans",
+      "slack_id": "U02G2MU8A",
+      "manager_slack_id": "U0ACKBHM2S1",
+      "role": "CEO",
+      "question": "What percentage of your day did you spend on fundraising?",
+      "input_type": "percentage",
+      "target": null,
+      "target_label": null
     }
   ]
 }
