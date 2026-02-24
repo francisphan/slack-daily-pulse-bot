@@ -4,7 +4,8 @@ import { DateTime } from 'luxon';
 import { AppConfig } from './types';
 import * as messenger from './messenger';
 import * as followups from './followups';
-import { loadConfig } from './config';
+import * as ooo from './ooo';
+import { loadConfig, isPaused } from './config';
 
 function getPreviousBusinessDay(now: DateTime): DateTime {
   if (now.weekday === 1) return now.minus({ days: 3 }); // Monday -> Friday
@@ -40,6 +41,10 @@ export function setupSchedules(app: App, config: AppConfig): void {
   checkinRule.tz = tz;
 
   schedule.scheduleJob('daily-checkin', checkinRule, async () => {
+    if (isPaused()) {
+      console.log('Daily check-in skipped — bot is paused');
+      return;
+    }
     const freshConfig = loadConfig();
     const now = DateTime.now().setZone(tz);
     const todayDate = now.toISODate()!;
@@ -48,6 +53,10 @@ export function setupSchedules(app: App, config: AppConfig): void {
 
     for (const member of freshConfig.team) {
       if (member.slack_id.startsWith('REPLACE')) continue;
+      if (ooo.isOoo(member.slack_id, todayDate)) {
+        console.log(`  Skipping ${member.name} — OOO`);
+        continue;
+      }
       try {
         await messenger.sendCheckinDM(app, member, todayDate);
         followups.markCheckinSent(member, todayDate);
@@ -74,6 +83,10 @@ export function setupSchedules(app: App, config: AppConfig): void {
     followupRule.tz = tz;
 
     schedule.scheduleJob(`followup-${attempt}`, followupRule, async () => {
+      if (isPaused()) {
+        console.log(`Follow-up #${attempt + 1} skipped — bot is paused`);
+        return;
+      }
       const freshConfig = loadConfig();
       const now = DateTime.now().setZone(tz);
       const previousBusinessDay = getPreviousBusinessDay(now);
@@ -89,6 +102,10 @@ export function setupSchedules(app: App, config: AppConfig): void {
       for (const entry of pending) {
         const member = freshConfig.team.find((m) => m.slack_id === entry.slack_id);
         if (!member) continue;
+        if (ooo.isOoo(entry.slack_id, targetDate)) {
+          console.log(`  Skipping follow-up for ${member.name} — OOO`);
+          continue;
+        }
 
         try {
           await messenger.sendFollowupDM(app, member, targetDate, entry.followup_count + 1);
@@ -112,6 +129,10 @@ export function setupSchedules(app: App, config: AppConfig): void {
   summaryRule.tz = tz;
 
   schedule.scheduleJob('weekly-summary', summaryRule, async () => {
+    if (isPaused()) {
+      console.log('Weekly summary skipped — bot is paused');
+      return;
+    }
     const freshConfig = loadConfig();
     const now = DateTime.now().setZone(tz);
     console.log(`[${now.toISO()}] Running weekly summary`);
