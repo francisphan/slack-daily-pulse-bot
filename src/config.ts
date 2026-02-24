@@ -32,3 +32,16 @@ export function saveConfig(config: AppConfig): void {
     .prepare("INSERT OR REPLACE INTO config (key, value) VALUES ('app_config', ?)")
     .run(JSON.stringify(config, null, 2));
 }
+
+export function isPaused(): boolean {
+  const row = getDb()
+    .prepare("SELECT value FROM config WHERE key = 'paused'")
+    .get() as { value: string } | undefined;
+  return row?.value === 'true';
+}
+
+export function setPaused(paused: boolean): void {
+  getDb()
+    .prepare("INSERT OR REPLACE INTO config (key, value) VALUES ('paused', ?)")
+    .run(String(paused));
+}
